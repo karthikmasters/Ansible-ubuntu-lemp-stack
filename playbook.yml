@@ -1,0 +1,156 @@
+---
+- hosts: default
+  remote_user: vagrant
+  become: yes
+  vars_files: 
+    - vars/main.yml
+  tasks:
+    - name: apt-get update
+      apt:
+        update-cache: yes
+      changed_when: 0
+ 
+    - name: get list of pending upgrades
+      command: apt-get --simulate dist-upgrade
+      args:
+        warn: false 
+      register: apt_simulate
+      changed_when: 0
+ 
+    - name: apt-get update
+      apt:
+        update-cache: yes
+      changed_when: 0
+
+    - name: Install nginx
+      apt: name=nginx state=latest update_cache=yes
+ 
+    - name: Installing dependencies
+      apt: 
+        name: "{{ packages }}"
+        state: "latest"
+      vars:
+        packages:
+        - zip
+        - unzip
+        - curl
+        - git
+        # - python-software-properties
+ 
+    - name: Add PHP 7.2 to source list
+      apt_repository: repo="ppa:ondrej/php" state=present
+ 
+    - name: apt-get update
+      apt:
+        update-cache: yes
+      changed_when: 0
+ 
+    - name: Install PHP 7.2
+      apt: 
+        name: "{{ packages }}"
+        state: "latest"
+        update_cache: yes
+      vars:
+        packages:
+        - php7.2
+        - php7.2-fpm
+        - php7.2-cli
+        - php7.2-common
+        - php7.2-mbstring
+        - php7.2-gd
+        - php7.2-intl
+        - php7.2-xml
+        - php7.2-zip
+        - php7.2-pgsql
+        - php7.2-curl
+
+    - name: Configure PHP 7.2 cli settings
+      lineinfile: dest=/etc/php/7.2/cli/php.ini regexp="^{{ item.param }} =" line="{{ item.param }} = {{ item.value }}"
+      with_items :
+        - { param: post_max_size, value: "10M" }
+        - { param: upload_max_filesize, value: "10M" }
+        - { param: date.timezone , value: "UTC" }
+        - { param: cgi.fix_pathinfo , value: "1" }
+        - { param: expose_php , value: "Off" }
+
+    - name: Configure PHP 7.2 fpm settings
+      lineinfile: dest=/etc/php/7.2/fpm/php.ini regexp="^{{ item.param }} =" line="{{ item.param }} = {{ item.value }}"
+      with_items :
+        - { param: post_max_size, value: "10M" }
+        - { param: upload_max_filesize, value: "10M" }
+        - { param: date.timezone , value: "UTC" }
+        - { param: cgi.fix_pathinfo , value: "1" }
+        - { param: expose_php , value: "Off" }
+
+    - name: Download Composer
+      script: install_composer.sh
+ 
+    - name: Move Composer globally
+      become: true
+      command: mv composer.phar /usr/local/bin/composer
+ 
+    - name: Set permissions on Composer
+      become: true
+      file:
+        path: /usr/local/bin/composer
+        mode: "a+x"
+ 
+    - name: remove default conf file
+      file: path='/etc/nginx/sites-enabled/default' state=absent
+ 
+    - name: Generate the {{ project_name }} site config
+      copy: src=templates/nginx.conf
+            dest=/etc/nginx/sites-available/{{ project_name }}
+ 
+    - name: Activate the {{ project_name }} site
+      file: src=/etc/nginx/sites-available/{{ project_name }}
+            dest=/etc/nginx/sites-enabled/{{ project_name }}
+            state=link
+ 
+    - name: Restart nginx
+      service: name=nginx state=restarted
+
+    - name: Restart PHP 7.2
+      service: name=php7.2-fpm state=restarted
+ 
+    - name: Creates project directory
+      file: path=/var/www/{{ project_name }} state=directory owner=vagrant group=vagrant
+
+    - name: Creates project directory
+      file: path=/var/www/{{ project_name }}/releases state=directory owner=vagrant group=vagrant
+
+    - name: Unarchive a file that needs to be downloaded (added in 2.0)
+      unarchive:
+        src: https://{{git_user}}:{{git_pass}}@github.com/{{git_user}}/{{ git_repo }}/archive/{{git_branch}}.zip
+        dest: /var/www/{{ project_name }}/releases/
+        remote_src: yes
+      become: no
+
+    - name: Renaming folder name
+      command: mv /var/www/{{ project_name }}/releases/{{ git_repo }}-{{git_branch}}/ /var/www/{{ project_name }}/releases/{{timestamp}}
+
+    - name: Activate the {{ project_name }} site
+      file: src=/var/www/{{ project_name }}/releases/{{timestamp}}
+            dest=/var/www/{{ project_name }}/current
+            state=link
+
+    - name: Updating Composer
+      composer:
+        command: update
+        working_dir: /var/www/{{ project_name }}/current
+      become: no
+
+    - name: Changing ownership
+      file: dest=/var/www/{{ project_name }} owner=root group=root
+
+    - name: Copying example env file
+      command: cp /var/www/{{ project_name }}/current/.env.example /var/www/{{ project_name }}/current/.env
+
+    - name: Generate key in env file
+      command: /usr/bin/php /var/www/{{ project_name }}/current/artisan key:generate
+
+    - name: Changing permission
+      file: dest={{item}} group=www-data mode=u=rwX,g=rwX recurse=yes
+      with_items:
+        - /var/www/{{ project_name }}/current/storage
+        - /var/www/{{ project_name }}/current/bootstrap/cache

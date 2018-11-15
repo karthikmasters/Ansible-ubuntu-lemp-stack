@@ -1,0 +1,7 @@
+---
+timestamp: [timestamp]
+project_name: [project-name]
+git_user: [git-user]
+git_pass: [access-token]
+git_repo: [repo-name]
+git_branch: [branch]
